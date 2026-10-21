@@ -1,9 +1,9 @@
 //! Cipher suite implementations using aws-lc-rs.
 
 use aws_lc_rs::aead::quic::{self as aws_quic, HeaderProtectionKey};
-use aws_lc_rs::aead::{AES_128_GCM, AES_256_GCM, CHACHA20_POLY1305, UnboundKey};
 use aws_lc_rs::aead::{Aad as AwsAad, LessSafeKey, Nonce as AwsNonce};
-use aws_lc_rs::cipher::{self as aws_cipher, AES_128, AES_256, EncryptingKey, UnboundCipherKey};
+use aws_lc_rs::aead::{UnboundKey, AES_128_GCM, AES_256_GCM, CHACHA20_POLY1305};
+use aws_lc_rs::cipher::{self as aws_cipher, EncryptingKey, UnboundCipherKey, AES_128, AES_256};
 
 use super::super::{Cipher, SupportedDtls12CipherSuite, SupportedDtls13CipherSuite};
 use crate::buffer::{Buf, TmpBuf};
@@ -285,17 +285,82 @@ impl SupportedDtls12CipherSuite for PskAes128Ccm8 {
     }
 }
 
+/// TLS_PSK_WITH_AES_128_GCM_SHA256 cipher suite.
+#[derive(Debug)]
+struct PskAes128GcmSha256;
+
+impl SupportedDtls12CipherSuite for PskAes128GcmSha256 {
+    fn suite(&self) -> Dtls12CipherSuite {
+        Dtls12CipherSuite::PSK_AES128_GCM_SHA256
+    }
+
+    fn hash_algorithm(&self) -> HashAlgorithm {
+        HashAlgorithm::SHA256
+    }
+
+    fn key_lengths(&self) -> (usize, usize, usize) {
+        (0, 16, 4) // (mac_key_len, enc_key_len, fixed_iv_len)
+    }
+
+    fn explicit_nonce_len(&self) -> usize {
+        8
+    }
+
+    fn tag_len(&self) -> usize {
+        16
+    }
+
+    fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, CryptoError> {
+        Ok(Box::new(AesGcm::new(key)?))
+    }
+}
+
+/// TLS_ECDHE_PSK_WITH_CHACHA20_POLY1305_SHA256 cipher suite.
+#[derive(Debug)]
+struct EcdhePskChaCha20Poly1305Sha256;
+
+impl SupportedDtls12CipherSuite for EcdhePskChaCha20Poly1305Sha256 {
+    fn suite(&self) -> Dtls12CipherSuite {
+        Dtls12CipherSuite::ECDHE_PSK_CHACHA20_POLY1305_SHA256
+    }
+
+    fn hash_algorithm(&self) -> HashAlgorithm {
+        HashAlgorithm::SHA256
+    }
+
+    fn key_lengths(&self) -> (usize, usize, usize) {
+        (0, 32, 12) // (mac_key_len, enc_key_len, fixed_iv_len)
+    }
+
+    fn explicit_nonce_len(&self) -> usize {
+        0
+    }
+
+    fn tag_len(&self) -> usize {
+        16
+    }
+
+    fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, CryptoError> {
+        Ok(Box::new(ChaCha20Poly1305Cipher::new(key)?))
+    }
+}
+
 /// Static instances of supported DTLS 1.2 cipher suites.
 static AES_128_GCM_SHA256: Aes128GcmSha256 = Aes128GcmSha256;
 static AES_256_GCM_SHA384: Aes256GcmSha384 = Aes256GcmSha384;
 static CHACHA20_POLY1305_SHA256: ChaCha20Poly1305Sha256 = ChaCha20Poly1305Sha256;
 static PSK_AES_128_CCM_8: PskAes128Ccm8 = PskAes128Ccm8;
+static PSK_AES_128_GCM_SHA256: PskAes128GcmSha256 = PskAes128GcmSha256;
+static ECDHE_PSK_CHACHA20_POLY1305_SHA256: EcdhePskChaCha20Poly1305Sha256 =
+    EcdhePskChaCha20Poly1305Sha256;
 
 /// All supported DTLS 1.2 cipher suites.
 pub(super) static ALL_CIPHER_SUITES: &[&dyn SupportedDtls12CipherSuite] = &[
     &AES_128_GCM_SHA256,
     &AES_256_GCM_SHA384,
     &CHACHA20_POLY1305_SHA256,
+    &ECDHE_PSK_CHACHA20_POLY1305_SHA256,
+    &PSK_AES_128_GCM_SHA256,
     &PSK_AES_128_CCM_8,
 ];
 

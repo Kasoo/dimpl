@@ -594,7 +594,10 @@ impl ConfigBuilder {
         // suites are exclusively PSK — those don't negotiate an ECDHE group.
         // Any cert-based DTLS 1.2 suite left in the filter still needs a
         // compatible key exchange group, even when PSK is also configured.
-        let has_non_psk_dtls12 = dtls12_suites.iter().any(|cs| !cs.suite().is_psk());
+        // ECDHE_PSK suites are PSK-authenticated but still negotiate an ECDHE group.
+        let has_non_psk_dtls12 = dtls12_suites
+            .iter()
+            .any(|cs| !cs.suite().is_psk() || cs.suite().has_ecc());
 
         // Validate kx_groups filter: each enabled version needs compatible groups
         // (PSK-only DTLS 1.2 configs don't need key exchange groups)

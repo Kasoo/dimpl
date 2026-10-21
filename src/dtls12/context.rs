@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use arrayvec::ArrayVec;
 
-use crate::CryptoError;
 use crate::buffer::{Buf, TmpBuf, ToBuf};
 use crate::crypto;
 use crate::crypto::SrtpProfile;
@@ -13,6 +12,7 @@ use crate::dtls12::message::DigitallySigned;
 use crate::dtls12::message::{Asn1Cert, Certificate};
 use crate::dtls12::message::{CurveType, Dtls12CipherSuite, HashAlgorithm};
 use crate::dtls12::message::{NamedGroup, SignatureAlgorithm};
+use crate::CryptoError;
 
 /// DTLS 1.2 crypto context holding negotiated keys and ciphers for a session.
 pub struct CryptoContext {
@@ -168,6 +168,26 @@ impl CryptoContext {
         pms.extend_from_slice(&(n as u16).to_be_bytes());
         pms.resize(pms.len() + n, 0);
         pms.extend_from_slice(&(n as u16).to_be_bytes());
+        pms.extend_from_slice(psk);
+        self.pre_master_secret = Some(pms);
+        Ok(())
+    }
+
+    /// Turn the ECDH shared secret held as the pre-master secret into the ECDHE_PSK
+    /// pre-master secret (RFC 5489 §2).
+    ///
+    /// Format: `uint16(Z) || Z || uint16(N) || PSK(N)`, where Z is the ECDH shared secret.
+    pub fn compute_ecdhe_psk_pre_master_secret(&mut self) -> Result<(), CryptoError> {
+        let psk = self.psk.as_ref().ok_or(CryptoError::PskNotSet)?;
+        let z = self
+            .pre_master_secret
+            .take()
+            .ok_or(CryptoError::PreMasterSecretNotAvailable)?;
+        // This secret is dropped after deriving the master secret, never pooled.
+        let mut pms = Buf::new();
+        pms.extend_from_slice(&(z.len() as u16).to_be_bytes());
+        pms.extend_from_slice(&z);
+        pms.extend_from_slice(&(psk.len() as u16).to_be_bytes());
         pms.extend_from_slice(psk);
         self.pre_master_secret = Some(pms);
         Ok(())
