@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use dimpl::crypto::Dtls12CipherSuite;
+use dimpl::crypto::{Dtls12CipherSuite, NamedGroup};
 use dimpl::{Config, Dtls, Error, PskResolver};
 
 use crate::common::{deliver_packets, drain_outputs};
@@ -69,9 +69,10 @@ fn psk_configs_for_suite(suite: Dtls12CipherSuite) -> (Arc<Config>, Arc<Config>)
     (client, server)
 }
 
-const PSK_SUITES: [Dtls12CipherSuite; 2] = [
+const PSK_SUITES: [Dtls12CipherSuite; 3] = [
     Dtls12CipherSuite::PSK_AES128_CCM_8,
     Dtls12CipherSuite::PSK_AES128_GCM_SHA256,
+    Dtls12CipherSuite::ECDHE_PSK_CHACHA20_POLY1305_SHA256,
 ];
 
 #[test]
@@ -446,4 +447,128 @@ fn psk_valid_identity_succeeds() {
 
     assert!(client_connected, "PSK client should connect");
     assert!(server_connected, "PSK server should connect");
+}
+
+/// Runs a PSK handshake and returns whether both sides connected.
+fn psk_handshake_connects(client_config: Arc<Config>, server_config: Arc<Config>) -> bool {
+    let now = Instant::now();
+
+    let mut client = Dtls::new_12_psk(client_config, now);
+    client.set_active(true);
+
+    let mut server = Dtls::new_12_psk(server_config, now);
+    server.set_active(false);
+
+    let mut client_connected = false;
+    let mut server_connected = false;
+
+    for _ in 0..60 {
+        if client.handle_timeout(Instant::now()).is_err()
+            || server.handle_timeout(Instant::now()).is_err()
+        {
+            return false;
+        }
+
+        let client_out = drain_outputs(&mut client);
+        client_connected |= client_out.connected;
+        deliver_packets(&client_out.packets, &mut server);
+
+        let server_out = drain_outputs(&mut server);
+        server_connected |= server_out.connected;
+        deliver_packets(&server_out.packets, &mut client);
+
+        if client_connected && server_connected {
+            return true;
+        }
+    }
+    false
+}
+
+fn psk_configs_with_groups(
+    suites: &[Dtls12CipherSuite],
+    client_groups: &[NamedGroup],
+    server_groups: &[NamedGroup],
+) -> (Arc<Config>, Arc<Config>) {
+    let identity = b"test-device".to_vec();
+    let resolver = Arc::new(FixedPsk {
+        identity: identity.clone(),
+        key: b"0123456789abcdef".to_vec(),
+    });
+
+    let mut provider = Config::default().crypto_provider().clone();
+    let selected: Vec<_> = provider
+        .cipher_suites
+        .iter()
+        .copied()
+        .filter(|cs| suites.contains(&cs.suite()))
+        .collect();
+    provider.cipher_suites = Box::leak(selected.into_boxed_slice());
+
+    let client = Arc::new(
+        Config::builder()
+            .with_crypto_provider(provider.clone())
+            .kx_groups(client_groups)
+            .with_psk_client(identity, resolver.clone())
+            .build()
+            .expect("build PSK client config"),
+    );
+    let server = Arc::new(
+        Config::builder()
+            .with_crypto_provider(provider)
+            .kx_groups(server_groups)
+            .with_psk_server(None, resolver)
+            .build()
+            .expect("build PSK server config"),
+    );
+    (client, server)
+}
+
+#[test]
+fn ecdhe_psk_falls_back_to_plain_psk_without_common_group() {
+    let _ = env_logger::try_init();
+
+    // ECDHE_PSK is preferred, but the peers share no ECDHE group, so the server
+    // must choose a plain PSK suite instead.
+    let (client, server) = psk_configs_with_groups(
+        &[
+            Dtls12CipherSuite::ECDHE_PSK_CHACHA20_POLY1305_SHA256,
+            Dtls12CipherSuite::PSK_AES128_GCM_SHA256,
+        ],
+        &[NamedGroup::X25519],
+        &[NamedGroup::Secp256r1],
+    );
+
+    assert!(
+        psk_handshake_connects(client, server),
+        "handshake should fall back to a plain PSK suite"
+    );
+}
+
+#[test]
+fn ecdhe_psk_only_fails_without_common_group() {
+    let _ = env_logger::try_init();
+
+    let (client, server) = psk_configs_with_groups(
+        &[Dtls12CipherSuite::ECDHE_PSK_CHACHA20_POLY1305_SHA256],
+        &[NamedGroup::X25519],
+        &[NamedGroup::Secp256r1],
+    );
+
+    assert!(
+        !psk_handshake_connects(client, server),
+        "ECDHE_PSK alone cannot connect without a common group"
+    );
+}
+
+#[test]
+fn ecdhe_psk_connects_with_common_group() {
+    let _ = env_logger::try_init();
+
+    let (client, server) = psk_configs_with_groups(
+        &[Dtls12CipherSuite::ECDHE_PSK_CHACHA20_POLY1305_SHA256],
+        &[NamedGroup::X25519, NamedGroup::Secp256r1],
+        &[NamedGroup::Secp256r1],
+    );
+
+    assert!(psk_handshake_connects(client, server));
 }

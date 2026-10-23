@@ -15,6 +15,7 @@ pub struct ServerKeyExchange {
 pub enum ServerKeyExchangeParams {
     Ecdh(EcdhParams),
     Psk(PskParams),
+    EcdhePsk(EcdhePskParams),
 }
 
 impl ServerKeyExchange {
@@ -32,6 +33,10 @@ impl ServerKeyExchange {
                 let (input, psk_params) = PskParams::parse(input, base_offset)?;
                 (input, ServerKeyExchangeParams::Psk(psk_params))
             }
+            KeyExchangeAlgorithm::ECDHE_PSK => {
+                let (input, params) = EcdhePskParams::parse(input, base_offset)?;
+                (input, ServerKeyExchangeParams::EcdhePsk(params))
+            }
             _ => return Err(Err::Failure(Error::new(input, ErrorKind::Tag))),
         };
 
@@ -44,13 +49,14 @@ impl ServerKeyExchange {
                 ecdh_params.serialize(buf, output, with_signature)
             }
             ServerKeyExchangeParams::Psk(psk_params) => psk_params.serialize(buf, output),
+            ServerKeyExchangeParams::EcdhePsk(params) => params.serialize(buf, output),
         }
     }
 
     pub fn signature(&self) -> Option<&DigitallySigned> {
         match &self.params {
             ServerKeyExchangeParams::Ecdh(ecdh_params) => ecdh_params.signature.as_ref(),
-            ServerKeyExchangeParams::Psk(_) => None,
+            ServerKeyExchangeParams::Psk(_) | ServerKeyExchangeParams::EcdhePsk(_) => None,
         }
     }
 }
@@ -117,6 +123,37 @@ impl EcdhParams {
                 signed.serialize(buf, output);
             }
         }
+    }
+}
+
+/// ECDHE_PSK server parameters (RFC 5489): the PSK identity hint, then the ECDH
+/// parameters, with no signature. The PSK authenticates the exchange through the
+/// pre-master secret, which combines the ECDH shared secret with the PSK.
+///
+/// Wire format: `uint16 hint_length + hint + curve_type + named_group + uint8 point_length + point`
+#[derive(Debug, PartialEq, Eq)]
+pub struct EcdhePskParams {
+    pub hint: PskParams,
+    pub ecdh: EcdhParams,
+}
+
+impl EcdhePskParams {
+    pub fn parse(input: &[u8], base_offset: usize) -> IResult<&[u8], EcdhePskParams> {
+        let original_input = input;
+        let (input, hint) = PskParams::parse(input, base_offset)?;
+        let ecdh_offset =
+            base_offset + (input.as_ptr() as usize - original_input.as_ptr() as usize);
+        let (input, ecdh) = EcdhParams::parse(input, ecdh_offset)?;
+        // ECDHE_PSK parameters are never signed.
+        if ecdh.signature.is_some() {
+            return Err(Err::Failure(Error::new(input, ErrorKind::Verify)));
+        }
+        Ok((input, EcdhePskParams { hint, ecdh }))
+    }
+
+    pub fn serialize(&self, buf: &[u8], output: &mut Buf) {
+        self.hint.serialize(buf, output);
+        self.ecdh.serialize(buf, output, false);
     }
 }
 

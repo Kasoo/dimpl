@@ -1,5 +1,6 @@
 # Unreleased
 
+  * Add PSK (Pre-Shared Key) cipher suite `ECDHE_PSK_CHACHA20_POLY1305_SHA256` for DTLS 1.2
   * Reject leftover handshake epochs in DTLS 1.2/1.3 #200
   * Discard premature ciphertext and stale plaintext handshakes #199
   * Drop unsupported epochs before buffering DTLS records #198
